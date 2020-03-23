@@ -89,7 +89,7 @@ class Room {
   }
 
   getUser(username: string) {
-    return this.users.find((user: User) => user.username = username);
+    return this.users.find((user: User) => user.username === username);
   }
 
   toJSON() {

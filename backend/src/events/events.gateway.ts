@@ -66,7 +66,6 @@ export class EventsGateway implements OnGatewayDisconnect, OnGatewayConnection, 
     const room = getRoom(session.room_id);
     client.join(session.room_id);
     client.to(room.getId()).emit('room_state', { error: null, data: { room: room.toJSON() }});
-    console.log(room.toJSON(), '::: ROOOM')
     return { error: null, data: { room: room.toJSON() }};
   }
 
