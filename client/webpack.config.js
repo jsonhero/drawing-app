@@ -38,13 +38,14 @@ module.exports = {
     output: {
         path: path.join(__dirname, 'dist'),
         filename: 'server.js',
+        publicPath: '/',
     },
     devServer: {
         proxy: { // proxy URLs to backend development server
             '/api': 'http://localhost:3000'
         },
-        contentBase: path.join(__dirname, 'public'), // boolean | string | array, static file location
-        compress: true, // enable gzip compression
+        // contentBase: path.join(__dirname, 'public'), // boolean | string | array, static file location
+        // compress: true, // enable gzip compression
         historyApiFallback: true, // true for index.html upon 404, object for multiple paths
         hot: true, // hot module replacement. Depends on HotModuleReplacementPlugin
         port: 8000,
