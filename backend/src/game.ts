@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import { v4 as uuidv4 } from 'uuid';
 import crypto = require('crypto');
 
 function generateRoomCode() {
@@ -11,17 +12,26 @@ enum RoomRole {
   Partcipant = 'PARTICPANT'
 }
 
+enum RoomStatus {
+  LOBBY = 'LOBBY',
+  IN_GAME = 'IN_GAME'
+}
+
 
 class User {
+  id: string;
   username: string;
   isInactive: boolean = false;
   inactiveTimestamp: number = null;
   role: RoomRole;
   isReady: boolean = false;
+  socketId: string;
 
-  constructor(username: string, role: RoomRole) {
+  constructor(username: string, role: RoomRole, socketId: string) {
+    this.id = uuidv4();
     this.role = role;
     this.username = username;
+    this.socketId = socketId;
   }
  
   setInactive() {
@@ -41,6 +51,10 @@ class User {
       this.isReady = true;
     }
   }
+
+  setReady(ready: boolean) {
+    this.isReady = ready;
+  }
   
   toJSON() {
     return {
@@ -55,6 +69,7 @@ class User {
 class Room {
   id: string;
   users: User[] = [];
+  status: RoomStatus = RoomStatus.LOBBY
 
   constructor(roomId: string) {
     this.id = roomId;
@@ -68,8 +83,8 @@ class Room {
     this.users.push(user);
   }
 
-  removeUser(username: string) {
-    this.users = this.users.filter((user: User) => user.username !== username);
+  removeUser(socketId: string) {
+    this.users = this.users.filter((user: User) => user.socketId !== socketId);
   }
 
   removeInactiveUsers(expireTime: number = 15000) {
@@ -88,13 +103,18 @@ class Room {
     }
   }
 
-  getUser(username: string) {
-    return this.users.find((user: User) => user.username === username);
+  getUser(socketId: string) {
+    return this.users.find((user: User) => user.socketId === socketId);
+  }
+
+  startGame() {
+    this.status = RoomStatus.IN_GAME;
   }
 
   toJSON() {
     return {
       id: this.id,
+      status: this.status.toString(),
       users: this.users.map((user: User) => user.toJSON()),
     };
   }
@@ -158,21 +178,20 @@ export function markRoomUserActive(roomId, username) {
 }
 
 
-export function createRoom({ id = '', username }) {
+export function createRoom(username, socketId) {
   const newRoomCode = generateRoomCode();
   if (rooms.has(newRoomCode)) {
     throw new Error('Room already exists.');
   }
 
   const newRoom = new Room(newRoomCode);
-  newRoom.addUser(new User(username, RoomRole.Host))
+  newRoom.addUser(new User(username, RoomRole.Host, socketId))
 
   rooms.set(newRoomCode, newRoom);
-  return newRoom;
+  return newRoomCode;
 }
 
-export function joinRoom(roomId, { id, username }) {
-  console.log(roomId, username);
+export function joinRoom(roomId, username, socketId) {
   if (!rooms.has(roomId)) {
     throw new Error('Room does not exist.');
   }
@@ -186,8 +205,9 @@ export function joinRoom(roomId, { id, username }) {
     }
   }
 
-  room.addUser(new User(username, RoomRole.Partcipant));
-  return room;
+  const user = new User(username, RoomRole.Partcipant, socketId)
+  room.addUser(user);
+  return user;
 }
 
 export function roomExists(roomId) {
@@ -201,14 +221,12 @@ export function getRoom(roomId) {
   return rooms.get(roomId);
 }
 
-export function leaveRoom(roomId, username) {
-  console.log(rooms, roomId, ':: roomie')
+export function leaveRoom(roomId, socketId) {
   if (!rooms.has(roomId)) {
     throw new Error('Room does not exist.');
   }
-  console.log('leavin dat shit');
   const room = rooms.get(roomId);
-  room.removeUser(username);
+  room.removeUser(socketId);
   if (!room.users.length) {
     rooms.delete(roomId);
   }

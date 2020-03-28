@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useState, useMemo} from 'react';
 import io from 'socket.io-client';
 import {StoreProvider, useStoreActions, useStoreState} from 'easy-peasy';
 import {
@@ -9,20 +9,31 @@ import {
   useHistory,
   useParams,
 } from "react-router-dom";
+import _ from 'lodash';
 
 import fetchApi from './fetchApi';
 import Editor from './Editor';
 import store from './store';
 
 import './App.css';
-const socket = io('http://localhost:3000', { autoConnect: false });
+const socket = io('http://localhost:3000');
 
 
-function useSocket() {
-  // useEffect(() => {
-  //   socket.connect();
-  // });
-  return {socket};
+function useGameClient() {
+
+  const emit = ({ event, eventData = {}, onSuccess = _.noop, onError = _.noop }) => {
+    socket.emit(event, eventData, (data) => {
+      if (data.status === 'ERROR') {
+        return onError(data);
+      }
+      return onSuccess(data);
+    })
+  }
+
+  const subscribe = (event, callback) => socket.on(eent, callback); 
+
+  
+  return [push, subscribe];
 }
 
 function App() {
@@ -42,23 +53,22 @@ function App() {
 }
 
 function Home() {
+  const [push] = useGameClient();
   const history = useHistory();
   const username = useStoreState(state => state.profile.username);
   const setUsername = useStoreActions(actions => actions.profile.setUsername);
 
   const handleHost = () => {
+
     if (!username.length) {
       return alert('Username must be set.');
     }
 
-    fetchApi('/api/room', {
-      method: 'POST',
-      body: {
-        username
+    push({
+      event: 'create_game',
+      onSuccess: ({ gameId }) => {
+        history.push(`/room/${gameId}`);
       }
-    }).then(({ room }) => {
-      console.log(room, ':data');
-      history.push(`/room/${room['id']}`);
     });
   }
 
@@ -72,7 +82,7 @@ function Home() {
   )
 }
 
-function JoinRoom() {
+function JoinGame() {
   const history = useHistory();
   const [code, setCode] = useState('');
   const username = useStoreState(state => state.profile.username);
@@ -99,47 +109,13 @@ function JoinRoom() {
 }
 
 function Routing() {
-  // const {socket} = useSocket();
-
-
-  // useEffect(() => {
-  //   console.log('mount')
-  //   socket.on('connect', () => {
-  //       console.log("We connected!!!");
-  //   })
-
-  //   socket.emit('events', {data: 'Oink'});
-  // });
-  // const username = useStoreState(state => state.profile.username);
-  const setUsername = useStoreActions(actions => actions.profile.setUsername);
-  const history = useHistory();
-  const [loading, setLoading] = useState(true);
-  
-
-  useEffect(() => {
-    fetchApi(`/api/room/profile`, {
-      method: 'GET',
-    }).then(({ roomId, username }) => {
-      setLoading(false);
-      if (roomId) {
-        setUsername({ username });
-        history.push(`/room/${roomId}`);
-      }
-    })
-  }, []);
-
-  if (loading) {
-    return <div>Loading...</div>
-  }
-
-
   return (
     <Switch>
       <Route exact path="/">
         <Home />
       </Route>
       <Route path="/join">
-        <JoinRoom />
+        <JoinGame />
       </Route>
       <Route path="/room/:roomId">
         <HostGame />
@@ -178,37 +154,45 @@ function HostGame() {
   const username = useStoreState(state => state.profile.username);
   
 
-
-  // const _pollFunc = async () => {
-  //   const { room } = await fetchApi(`/api/room/${roomId}`, {
-  //     method: 'GET',
-  //   });
-  //   setRoom(room);
-  // }
+  const roomUpdateHandler = ({ data }) => {
+    setRoom(data);
+  }
 
   const handleLeaveRoom = () => {
-    socket.emit('room_disconnect', null, () => {
-      socket.disconnect();
-      return history.push('/');
-    });
+    socket.emit('leave_game');
+    history.push('/');
   }
 
   const handleReady = () => {
-    socket.emit('room_event', { type: 'READY' }, ({ error, data }) => {
-      setRoom(data.room);
-    });
+    socket.emit('user_toggle_ready', { gameId:  'i'});
   }
+
+  const handleStart = () => {
+    socket.emit('room_event', { type: 'START' });
+  }
+
+  const allUsersReady = useMemo(() => {
+    if (!room) return true;
+    for (let i = 0; i < room.users.length; i++) {
+      const roomUser = room.users[i];
+      if (!roomUser.ready) return true;
+    }
+    return false;
+  }, [room]);
 
   useEffect(() => {
     socket.connect();
-    console.log("CONNECTING!!!!!!");
-    socket.emit('room_connect', null, ({ error, data }) => {
-      if (error) return history.push('/');
-      setRoom(data.room);
-    })
-    socket.on('room_state', ({ error, data }) => {
-      setRoom(data.room);
-    })
+    socket.emit('room_connect');
+    socket.on('room_state', roomUpdateHandler);
+
+    socket.on('client_error', ({ message }) => {
+      alert(message);
+    });
+    socket.on('room_connect_error', ({ error }) => {
+      alert(error);
+      history.push('/');
+    });
+
   }, []);
 
   if (!room) {
@@ -219,27 +203,37 @@ function HostGame() {
     )
   }
 
-  console.log(room, ':: room', username);
+  console.log(room, ':: room');
 
   const me = room.users.find((user) => user.username === username);
 
+  if (room.status === 'LOBBY') {
+    return (
+      <div>
+        <div>
+          <button onClick={handleLeaveRoom}>Leave Room</button>
+          <button onClick={handleReady}>{ me.ready ? 'Not Ready' : 'Ready'}</button>
+        </div>
+        <div>
+          Users:
+          {room.users.map(({ username, ready }) => (
+            <div key={username}>
+              <div style={{ color: ready ? 'green': 'red'}}>{username}</div>
+            </div>
+          ))}
+        </div>
+        <div>
+          {
+            me.role === 'HOST' ? <button disabled={allUsersReady} onClick={handleStart}>Start Game</button> : null
+          }
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div>
-        <button onClick={handleLeaveRoom}>Leave Room</button>
-        <button onClick={handleReady}>{ me.ready ? 'Ready' : 'Not Ready'}</button>
-      </div>
-      <div>
-        Users:
-        {room.users.map(({ username, ready }) => (
-          <div key={username}>
-            <div style={{ color: ready ? 'green': 'red'}}>{username}</div>
-          </div>
-        ))}
-      </div>
-      <div>
-        <button disabled={room.users.every((user) => !user.ready)}>Start Game</button>
-      </div>
+      Werein te game.
     </div>
   );
 }

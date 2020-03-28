@@ -7,7 +7,7 @@ import { AppController } from './app.controller';
 import { ViewsModule } from './views/views.module';
 
 import { EventsModule } from './events/events.module';
-import { RoomModule } from './room/room.module';
+// import { RoomModule } from './room/room.module';
 
 
 
@@ -20,7 +20,7 @@ import { RoomModule } from './room/room.module';
     // }),
     EventsModule,
     ViewsModule,
-    RoomModule,
+    // RoomModule,
   ],
   controllers: [AppController],
   providers: [],

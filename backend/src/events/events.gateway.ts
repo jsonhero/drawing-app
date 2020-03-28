@@ -7,14 +7,34 @@ import {
   ConnectedSocket,
   OnGatewayDisconnect,
   OnGatewayConnection,
-  OnGatewayInit
+  OnGatewayInit,
+  WsException,
 } from '@nestjs/websockets';
+import { UsePipes } from '@nestjs/common';
+
 
 // import { from, Observable } from 'rxjs';
 // import { map } from 'rxjs/operators';
 import { Server, Socket } from 'socket.io';
 
 import { createRoom, joinRoom, getRoom, leaveRoom, markRoomUserInactive, registerInactivityChecker } from '../game'; 
+
+
+const clientSocketMap = {};
+
+interface UserProfileBody {
+  username: string;
+}
+
+interface JoinRoomBody {
+  gameId: string;
+  username: string;
+}
+
+interface createGameBody {
+  username: string;
+}
+
 
 @WebSocketGateway()
 export class EventsGateway implements OnGatewayDisconnect, OnGatewayConnection, OnGatewayInit {
@@ -23,85 +43,97 @@ export class EventsGateway implements OnGatewayDisconnect, OnGatewayConnection, 
 
   afterInit() {
     console.log('Calling once');
+  }
 
-    registerInactivityChecker(this.server);
+  response(obj = {}) {
+    return {
+      status: 'OKAY',
+      ...obj
+    };
+  }
+
+  error(message = '', type = 'error') {
+    return {
+      status: 'ERROR',
+      error: {
+        type,
+        message
+      }
+    }
   }
   
-
   async handleDisconnect(client: Socket) {
-    const session = client.handshake['session'];
-    markRoomUserInactive(session.room_id, session.room_username);
+
   }
 
   async handleConnection(client: Socket, ...args: any[]) {
-    console.log(`Client connected: ${client.id}`);
-   }
-
-  @SubscribeMessage('events')
-  handleEvent(@MessageBody() data: any, @ConnectedSocket() client: Socket): any {
-    if (data.type === 'CREATE_GAME') {
-      const room = createRoom({ id: client.id, username: data.payload.username });
-      client.join(room['id']);
-      console.log(client.rooms, ':: Rooms');
-      return { error: null, data: room };
-    } else if (data.type === 'JOIN_GAME') {
-      try {
-        const room = joinRoom(data.payload.roomId, { id: client.id, username: data.payload.username });
-        client.to(room['id']).emit('users', { error: null, data: { users: room.users }})
-        return { data: room };
-      } catch (e) {
-        return { error: e.message }
-      }
-    }
-    return data;
   }
 
-  @SubscribeMessage('room_connect')
-  roomConnect(@MessageBody() data: any, @ConnectedSocket() client: Socket): any {
-    const session = client.handshake['session'];
-    console.log(session.room_id, ':: rooom id');
-    if (!session.room_id) {
-      return { error: 'No room id.', data: null };
-    }
-    const room = getRoom(session.room_id);
-    client.join(session.room_id);
-    client.to(room.getId()).emit('room_state', { error: null, data: { room: room.toJSON() }});
-    return { error: null, data: { room: room.toJSON() }};
-  }
+  @SubscribeMessage('create_game')
+  createGame(@MessageBody() data: createGameBody, @ConnectedSocket() client: Socket) {
+    const { username } = data;
 
-  @SubscribeMessage('room_disconnect')
-  roomDisconnect(@MessageBody() data: any, @ConnectedSocket() client: Socket): any {
-    const session = client.handshake['session'];
-    if (!session.room_id) {
-      return { error: 'No room to leave', data: null };
-    }
-
-    const room = leaveRoom(session.room_id, session.room_username);
-    client.to(session.room_id).emit('room_state', { error: null, data: { room: room.toJSON() }});
-
-    session.room_id = null;
-    session.room_role = null;
-    session.room_username = null;
-
-    return { error: null, data: null };
-  }
-
-  @SubscribeMessage('room_event')
-  roomUser(@MessageBody() data: any, @ConnectedSocket() client: Socket): any {
-    const session = client.handshake['session'];
-    const room = getRoom(session.room_id);
-    const roomUser = room.getUser(session.room_username);
-    
-    if (data.type === 'READY') {
-      roomUser.toggleReady();
-      client.to(room.getId()).emit('room_state', { error: null, data: { room: room.toJSON() }});
-      console.log(room.toJSON());
-      return { error: null, data: { room: room.toJSON() }}
+    try {
+      const gameId = createRoom(username, client.id);
+      client.join(gameId);
+      return this.response({ gameId, username });
+    } catch(e) {
+      return this.error(e.message);
     }
   }
 
-  @SubscribeMessage('identity')
-  async identity(@MessageBody() data: number): Promise<number> {
-    return data;
+
+  @SubscribeMessage('join_game')
+  joinGame(@MessageBody() data: JoinRoomBody, @ConnectedSocket() client: Socket) {
+    const { gameId, username } = data;
+
+    try {
+      const user = joinRoom(gameId, username, client.id);
+      client.join(gameId);
+      this.server.to(gameId).emit('user_joined', this.response({ user: user.toJSON() }))
+      return this.response({ gameId, username });
+    } catch(e) {
+      return this.error(e.message);
+    }
   }
+
+  @SubscribeMessage('leave_game')
+  leaveGame(@MessageBody() data: any, @ConnectedSocket() client: Socket) {
+    const { gameId } = data;
+
+    try {
+      const game = getRoom(gameId);
+      const user = game.getUser(client.id);
+      leaveRoom(game.id, client.id)
+      this.server.to(gameId).emit('user_quit', this.response({ userId: user.id }))
+      return this.response();
+    } catch(e) {
+      return this.error(e.message);
+    }
+  }
+
+  @SubscribeMessage('game_full_state')
+  getFullGameState(@MessageBody() data: any) {
+    const { gameId } = data;
+    try {
+      return this.response({ game: getRoom(gameId).toJSON() });
+    } catch (e) {
+      return this.error(e.message);
+    }
+  }
+  
+  @SubscribeMessage('user_toggle_ready')
+  userReady(@MessageBody() data: any, @ConnectedSocket() client: Socket) {
+    const { gameId, ready } = data;
+    try {
+      const game = getRoom(gameId);
+      const user = game.getUser(client.id);
+      user.setReady(ready);
+      this.server.to(gameId).emit('user_toggle_ready', this.response({ userId: user.id, ready: ready }));
+    } catch (e) {
+      return this.error(e.message);
+    }
+  }
+
+
 }
